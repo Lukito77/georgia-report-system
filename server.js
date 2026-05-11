@@ -3,37 +3,46 @@
  * ---------
  * Express backend for the anonymous submissions site.
  *
- * Endpoints:
- *   GET   /                            -> public submission form (static)
- *   GET   /admin.html                  -> admin panel (static; JS handles auth)
- *   POST  /api/submit                  -> public: save an anonymous submission
- *   POST  /api/admin/login             -> exchange password for a session cookie
- *   POST  /api/admin/logout            -> destroy the admin session
- *   GET   /api/admin/me                -> is the current visitor logged in?
- *   GET   /api/admin/submissions       -> protected: list all submissions
- *   DELETE /api/admin/submissions/:id  -> protected: delete one submission
+ * Admin auth uses a SIGNED JWT stored in an httpOnly cookie.
+ * No server-side session store - the cookie itself is the proof of admin.
+ * This is what fixes the "log in, instantly bounced out" problem on
+ * Render / Railway / Fly / any platform that:
+ *   - terminates HTTPS at a reverse proxy, and/or
+ *   - has an ephemeral filesystem and restarts your process at will.
  *
- * Storage: a single JSON file at ./data/submissions.json. Each record is
- * fully anonymous - we never store IP addresses, user-agents, or anything
- * that could identify the submitter.
+ * Endpoints:
+ *   GET    /                          public form (static)
+ *   GET    /admin.html                admin panel (static; JS handles auth)
+ *   POST   /api/submit                save an anonymous submission
+ *   POST   /api/admin/login           exchange password for an admin cookie
+ *   POST   /api/admin/logout          clear the admin cookie
+ *   GET    /api/admin/me              am I logged in?
+ *   GET    /api/admin/submissions     [auth] list all submissions
+ *   DELETE /api/admin/submissions/:id [auth] delete one submission
  */
 
 require('dotenv').config();
 
-const express     = require('express');
-const session     = require('express-session');
-const rateLimit   = require('express-rate-limit');
-const bcrypt      = require('bcryptjs');
-const helmet      = require('helmet');
-const path        = require('path');
-const fs          = require('fs');
-const crypto      = require('crypto');
+const express   = require('express');
+const rateLimit = require('express-rate-limit');
+const bcrypt    = require('bcryptjs');
+const jwt       = require('jsonwebtoken');
+const helmet    = require('helmet');
+const path      = require('path');
+const fs        = require('fs');
+const crypto    = require('crypto');
 
 const app  = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
+// Render / Heroku / Railway / Fly all sit behind a TLS-terminating proxy.
+// Telling Express to trust one proxy hop lets it correctly read
+// X-Forwarded-Proto (so req.secure is true on HTTPS) and X-Forwarded-For
+// (so express-rate-limit uses the real client IP, not the proxy's).
+app.set('trust proxy', 1);
+
 // ---------------------------------------------------------------------------
-// 1. Storage setup: ensure ./data/submissions.json exists
+// 1. Storage: data/submissions.json (atomic writes via temp file + rename)
 // ---------------------------------------------------------------------------
 const DATA_DIR  = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'submissions.json');
@@ -54,8 +63,6 @@ function readSubmissions() {
   }
 }
 
-// Write to a temp file then rename — prevents corruption if the process dies
-// in the middle of a write.
 function writeSubmissions(arr) {
   const tmp = DATA_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(arr, null, 2), 'utf8');
@@ -63,7 +70,7 @@ function writeSubmissions(arr) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Admin password (hashed in memory, never stored in plain text on disk)
+// 2. Admin password + JWT signing secret
 // ---------------------------------------------------------------------------
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const ADMIN_HASH     = bcrypt.hashSync(ADMIN_PASSWORD, 10);
@@ -71,23 +78,74 @@ const ADMIN_HASH     = bcrypt.hashSync(ADMIN_PASSWORD, 10);
 if (ADMIN_PASSWORD === 'changeme') {
   console.warn(
     '[WARN] Using the default admin password "changeme". ' +
-    'Set ADMIN_PASSWORD in a .env file before going live.'
+    'Set ADMIN_PASSWORD before going live.'
   );
 }
 
-const SESSION_SECRET =
-  process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+// The signing key for admin JWTs. Accepts the legacy SESSION_SECRET name too.
+// If neither is set, a random one is generated - which means EVERY restart
+// invalidates all admin cookies. Set this in production!
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  process.env.SESSION_SECRET ||
+  crypto.randomBytes(32).toString('hex');
 
-if (!process.env.SESSION_SECRET) {
+if (!process.env.JWT_SECRET && !process.env.SESSION_SECRET) {
   console.warn(
-    '[WARN] SESSION_SECRET not set; using a random one. ' +
-    'All admins will be logged out whenever the server restarts.'
+    '[WARN] JWT_SECRET not set; using a random one. ' +
+    'All admins will be logged out whenever the server restarts. ' +
+    'Set JWT_SECRET in your environment (e.g. Render dashboard).'
   );
+}
+
+const COOKIE_NAME       = 'admin_token';
+const TOKEN_TTL_SECONDS = 60 * 60 * 4; // 4 hours
+
+function signAdminToken() {
+  return jwt.sign({ role: 'admin' }, JWT_SECRET, {
+    expiresIn: TOKEN_TTL_SECONDS,
+  });
+}
+
+// Tiny no-dependency cookie reader: pulls one named value out of the
+// `Cookie:` header.
+function readAdminToken(req) {
+  const header = req.headers.cookie || '';
+  const prefix = COOKIE_NAME + '=';
+  const parts  = header.split(/;\s*/);
+  for (const piece of parts) {
+    if (piece.startsWith(prefix)) {
+      return decodeURIComponent(piece.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
+function verifyAdminToken(token) {
+  if (!token) return false;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    return !!(payload && payload.role === 'admin');
+  } catch (e) {
+    return false;
+  }
+}
+
+// Decide whether to mark the auth cookie as Secure.
+//   COOKIE_SECURE=true   -> always Secure  (use on HTTPS deployments)
+//   COOKIE_SECURE=false  -> never Secure   (use only for local HTTP dev)
+//   unset                -> auto: Secure when the request is HTTPS
+// Auto-detect works once `trust proxy` is configured (above).
+function shouldUseSecureCookie(req) {
+  const env = process.env.COOKIE_SECURE;
+  if (env === 'true')  return true;
+  if (env === 'false') return false;
+  return !!req.secure;
 }
 
 // ---------------------------------------------------------------------------
 // 3. Allowed locations - single source of truth shared with the browser.
-//    Shape: { Area: { Region: [City, City, ...] } }
+//    Shape: { Area: { Region: [City, ...] } }
 //    Editing public/locations.json updates BOTH the frontend dropdowns and
 //    this server-side validation; no code changes needed.
 // ---------------------------------------------------------------------------
@@ -113,29 +171,10 @@ function isValidLocation(area, region, city) {
 // ---------------------------------------------------------------------------
 // 4. Middleware
 // ---------------------------------------------------------------------------
-app.use(helmet({
-  // The default CSP would block our small inline favicons / future tweaks.
-  // We rely on Helmet's other security headers, which are on by default.
-  contentSecurityPolicy: false,
-}));
-
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '20kb' }));
 app.use(express.urlencoded({ extended: false, limit: '20kb' }));
 
-app.use(session({
-  name: 'sid',
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 1000 * 60 * 60 * 4, // 4-hour admin session
-  },
-}));
-
-// Rate limiting: keeps abusers from spamming the form or brute-forcing login.
 const submitLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
@@ -153,9 +192,21 @@ const loginLimiter = rateLimit({
 });
 
 function requireAdmin(req, res, next) {
-  if (req.session && req.session.isAdmin) return next();
+  if (verifyAdminToken(readAdminToken(req))) return next();
   return res.status(401).json({ error: 'Not authorized.' });
 }
+
+// Diagnostic logger for admin routes - safe to keep on; logs no PII.
+app.use('/api/admin', (req, res, next) => {
+  const token = readAdminToken(req);
+  console.log(
+    `[admin] ${req.method} ${req.path}  ` +
+    `cookie=${token ? 'yes' : 'no'}  ` +
+    `valid=${verifyAdminToken(token)}  ` +
+    `secure=${req.secure}`
+  );
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // 5. Static frontend (served from /public)
@@ -168,7 +219,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.post('/api/submit', submitLimiter, (req, res) => {
   const { problem, area, region, city, consent } = req.body || {};
 
-  // --- Validation ---
   if (typeof problem !== 'string' || !problem.trim()) {
     return res.status(400).json({ error: 'Please describe your problem.' });
   }
@@ -187,7 +237,6 @@ app.post('/api/submit', submitLimiter, (req, res) => {
     return res.status(400).json({ error: 'You must agree to the guidelines.' });
   }
 
-  // --- Anonymous record: ONLY what we need, nothing else ---
   const entry = {
     id: crypto.randomUUID(),
     problem: problem.trim(),
@@ -215,30 +264,46 @@ app.post('/api/admin/login', loginLimiter, (req, res) => {
   if (!bcrypt.compareSync(password, ADMIN_HASH)) {
     return res.status(401).json({ error: 'Incorrect password.' });
   }
-  req.session.isAdmin = true;
-  return res.json({ ok: true });
+
+  const token  = signAdminToken();
+  const secure = shouldUseSecureCookie(req);
+
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: secure,
+    maxAge: TOKEN_TTL_SECONDS * 1000,
+    path: '/',
+  });
+
+  console.log(`[admin] login OK  secure=${secure}`);
+  res.json({ ok: true });
 });
 
 app.post('/api/admin/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie('sid');
-    res.json({ ok: true });
+  // Match the attributes used to set the cookie so the browser actually
+  // clears it (otherwise it stays around with the old value).
+  res.clearCookie(COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: shouldUseSecureCookie(req),
+    path: '/',
   });
+  res.json({ ok: true });
 });
 
 app.get('/api/admin/me', (req, res) => {
-  res.json({ isAdmin: !!(req.session && req.session.isAdmin) });
+  res.json({ isAdmin: verifyAdminToken(readAdminToken(req)) });
 });
 
 app.get('/api/admin/submissions', requireAdmin, (req, res) => {
-  // Newest first
-  const all = readSubmissions().slice().reverse();
+  const all = readSubmissions().slice().reverse(); // newest first
   res.json({ submissions: all, count: all.length });
 });
 
 app.delete('/api/admin/submissions/:id', requireAdmin, (req, res) => {
-  const id  = req.params.id;
-  const all = readSubmissions();
+  const id   = req.params.id;
+  const all  = readSubmissions();
   const kept = all.filter(s => s.id !== id);
   if (kept.length === all.length) {
     return res.status(404).json({ error: 'Submission not found.' });
@@ -252,7 +317,7 @@ app.delete('/api/admin/submissions/:id', requireAdmin, (req, res) => {
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log('--------------------------------------------------------');
-  console.log(` Anonymous submissions server`);
+  console.log(` Anonymous submissions server listening on :${PORT}`);
   console.log(` Public form : http://localhost:${PORT}/`);
   console.log(` Admin panel : http://localhost:${PORT}/admin.html`);
   console.log('--------------------------------------------------------');

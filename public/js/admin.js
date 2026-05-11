@@ -84,12 +84,20 @@
   async function loadSubmissions() {
     submissionsEl.innerHTML = '<p class="empty-state">Loading...</p>';
     try {
-      var res = await fetch('/api/admin/submissions');
-      if (res.status === 401) { showLogin(); return; }
+      var res = await fetch('/api/admin/submissions', { credentials: 'same-origin' });
+      if (res.status === 401) {
+        console.error('[admin] /api/admin/submissions returned 401 - ' +
+                      'session cookie was not accepted by the server. ' +
+                      'Check the server console and the Network tab ' +
+                      '(Cookie / Set-Cookie headers).');
+        showLogin();
+        return;
+      }
       var data = await res.json();
       cache = data.submissions || [];
       applyFilter();
     } catch (e) {
+      console.error('[admin] loadSubmissions failed:', e);
       submissionsEl.innerHTML =
         '<p class="empty-state">Could not load submissions.</p>';
     }
@@ -99,7 +107,7 @@
     if (!confirm('Delete this submission permanently?')) return;
     try {
       var res = await fetch('/api/admin/submissions/' + encodeURIComponent(id),
-                            { method: 'DELETE' });
+                            { method: 'DELETE', credentials: 'same-origin' });
       if (res.ok) {
         cache = cache.filter(function (s) { return s.id !== id; });
         cardEl.remove();
@@ -153,6 +161,7 @@
     try {
       var res = await fetch('/api/admin/login', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: password }),
       });
@@ -172,7 +181,7 @@
   });
 
   logoutBtn.addEventListener('click', async function () {
-    try { await fetch('/api/admin/logout', { method: 'POST' }); }
+    try { await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }); }
     catch (_) {}
     cache = [];
     submissionsEl.innerHTML = '';
@@ -192,7 +201,7 @@
   });
 
   // On page load, check whether a session cookie already logs us in.
-  fetch('/api/admin/me')
+  fetch('/api/admin/me', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
     .then(function (d) { if (d.isAdmin) showAdmin(); else showLogin(); })
     .catch(showLogin);
