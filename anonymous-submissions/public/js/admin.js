@@ -1,9 +1,6 @@
-/* admin.js - admin panel.
- * Region was removed from the data model, so the submission card now shows
- * just the Area (as a pill) and City (as a subtitle). The filter searches
- * area / city / problem. Older records that still carry `region` are
- * displayed gracefully but no new entries will have it.
- */
+/* admin.js - logic for the admin panel.
+   Calls /api/admin/* endpoints. The browser cookie carries the session,
+   so the server decides on every request whether you are still logged in. */
 (function () {
   'use strict';
 
@@ -19,7 +16,7 @@
   var refreshBtn     = document.getElementById('refresh-btn');
   var filterInput    = document.getElementById('filter');
 
-  var cache = []; // last fetched submissions, used by the live filter
+  var cache = [];   // last fetched submissions, used by the live filter
 
   // --- helpers -----------------------------------------------------------
   function escapeHtml(s) {
@@ -32,24 +29,23 @@
   }
 
   function formatDate(iso) {
-    try { return new Date(iso).toLocaleString('ka-GE'); }
+    try { return new Date(iso).toLocaleString(); }
     catch (e) { return iso; }
   }
 
   function render(list) {
     countEl.textContent = '(' + list.length + ')';
     if (!list.length) {
-      submissionsEl.innerHTML =
-        '<p class="empty-state">' + escapeHtml(t('noSubmissions')) + '</p>';
+      submissionsEl.innerHTML = '<p class="empty-state">No submissions to show.</p>';
       return;
     }
     submissionsEl.innerHTML = list.map(function (s) {
-      // Subtitle: City for new entries; legacy entries may still have
-      // a region - we surface it for backward compatibility only.
+      // Build the "Region · City" subtitle. Older records may be missing
+      // some fields, so we filter empties out before joining.
       var detailParts = [];
-      if (s.region) detailParts.push(s.region);    // legacy data only
+      if (s.region) detailParts.push(s.region);
       if (s.city)   detailParts.push(s.city);
-      var detail = detailParts.join(' · ');
+      var detail = detailParts.join(' · '); // " · "
 
       var areaPill = s.area
         ? '<span class="region">' + escapeHtml(s.area) + '</span>'
@@ -66,9 +62,7 @@
           '</div>' +
           '<div class="text">' + escapeHtml(s.problem) + '</div>' +
           '<div class="actions">' +
-            '<button type="button" class="danger js-delete">' +
-              escapeHtml(t('delete')) +
-            '</button>' +
+            '<button type="button" class="danger js-delete">Delete</button>' +
           '</div>' +
         '</article>'
       );
@@ -79,57 +73,53 @@
     var q = filterInput.value.trim().toLowerCase();
     if (!q) { render(cache); return; }
     render(cache.filter(function (s) {
-      // REMOVED: region from filter scope (since field no longer exists),
-      // but we still match legacy region values if present.
       return (s.area    || '').toLowerCase().indexOf(q) !== -1 ||
-             (s.city    || '').toLowerCase().indexOf(q) !== -1 ||
              (s.region  || '').toLowerCase().indexOf(q) !== -1 ||
+             (s.city    || '').toLowerCase().indexOf(q) !== -1 ||
              (s.problem || '').toLowerCase().indexOf(q) !== -1;
     }));
   }
 
   // --- API calls ---------------------------------------------------------
   async function loadSubmissions() {
-    submissionsEl.innerHTML =
-      '<p class="empty-state">' + escapeHtml(t('loading')) + '</p>';
+    submissionsEl.innerHTML = '<p class="empty-state">Loading...</p>';
     try {
-      var res = await fetch('/api/admin/submissions', { credentials: 'same-origin' });
-      if (res.status === 401) {
-        console.error('[admin] /api/admin/submissions returned 401 - ' +
-                      'cookie was not accepted. Check Network tab.');
-        showLogin();
-        return;
-      }
+      var res = await fetch('/api/admin/submissions', {
+  credentials: 'include'
+});
+
+      if (res.status === 401) { showLogin(); return; }
       var data = await res.json();
       cache = data.submissions || [];
       applyFilter();
     } catch (e) {
-      console.error('[admin] loadSubmissions failed:', e);
       submissionsEl.innerHTML =
-        '<p class="empty-state">' + escapeHtml(t('couldNotLoad')) + '</p>';
+        '<p class="empty-state">Could not load submissions.</p>';
     }
   }
 
   async function deleteSubmission(id, cardEl) {
-    if (!confirm(t('confirmDelete'))) return;
+    if (!confirm('Delete this submission permanently?')) return;
     try {
-      var res = await fetch('/api/admin/submissions/' + encodeURIComponent(id),
-                            { method: 'DELETE', credentials: 'same-origin' });
+      var res = await fetch('/api/admin/submissions/' + encodeURIComponent(id), {
+  method: 'DELETE',
+  credentials: 'include'
+});
       if (res.ok) {
         cache = cache.filter(function (s) { return s.id !== id; });
         cardEl.remove();
         countEl.textContent = '(' + cache.length + ')';
         if (!cache.length) {
           submissionsEl.innerHTML =
-            '<p class="empty-state">' + escapeHtml(t('noSubmissions')) + '</p>';
+            '<p class="empty-state">No submissions to show.</p>';
         }
       } else if (res.status === 401) {
         showLogin();
       } else {
-        alert(t('deleteFailed'));
+        alert('Delete failed.');
       }
     } catch (e) {
-      alert(t('networkErrorDelete'));
+      alert('Network error while deleting.');
     }
   }
 
@@ -160,7 +150,7 @@
 
     var password = passwordInput.value;
     if (!password) {
-      loginError.textContent = t('errPasswordRequired');
+      loginError.textContent = 'Password required.';
       passwordInput.classList.add('input-error');
       return;
     }
@@ -168,9 +158,9 @@
     try {
       var res = await fetch('/api/admin/login', {
         method: 'POST',
-        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: password }),
+        credentials: 'include'
       });
       var data = {};
       try { data = await res.json(); } catch (_) {}
@@ -179,25 +169,31 @@
         passwordInput.value = '';
         showAdmin();
       } else {
-        loginError.textContent = data.error || t('errLoginFailed');
+        loginError.textContent = data.error || 'Login failed.';
         passwordInput.classList.add('input-error');
       }
     } catch (err) {
-      loginError.textContent = t('errNetwork');
+      loginError.textContent = 'Network error. Please try again.';
     }
   });
 
   logoutBtn.addEventListener('click', async function () {
-    try { await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }); }
-    catch (_) {}
-    cache = [];
-    submissionsEl.innerHTML = '';
-    showLogin();
-  });
+  try {
+    await fetch('/api/admin/logout', {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+  } catch (_) {}
+
+  cache = [];
+  submissionsEl.innerHTML = '';
+  showLogin();
+});
 
   refreshBtn.addEventListener('click', loadSubmissions);
   filterInput.addEventListener('input', applyFilter);
 
+  // Event-delegation for delete buttons (so newly-rendered cards work too).
   submissionsEl.addEventListener('click', function (e) {
     var btn = e.target.closest && e.target.closest('.js-delete');
     if (!btn) return;
@@ -207,8 +203,12 @@
   });
 
   // On page load, check whether a session cookie already logs us in.
-  fetch('/api/admin/me', { credentials: 'same-origin' })
-    .then(function (r) { return r.json(); })
-    .then(function (d) { if (d.isAdmin) showAdmin(); else showLogin(); })
-    .catch(showLogin);
-})();
+ fetch('/api/admin/me', {
+  credentials: 'include'
+})
+  .then(function (r) { return r.json(); })
+  .then(function (d) {
+    if (d.isAdmin) showAdmin();
+    else showLogin();
+  })
+  .catch(showLogin);
