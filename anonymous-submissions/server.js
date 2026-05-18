@@ -17,7 +17,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const fs = require('fs');
 
-const { createClient } = require('@supabase/supabase-js');
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
