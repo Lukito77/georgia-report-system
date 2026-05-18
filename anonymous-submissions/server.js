@@ -17,6 +17,13 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const fs = require('fs');
 
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
 const app = express();
 
 // -------------------- ENV --------------------
@@ -36,10 +43,7 @@ app.use(
   })
 );
 
-// -------------------- IN-MEMORY STORAGE (Vercel-safe) --------------------
-
-
-// -------------------- LOCATIONS (SAFE LOAD) --------------------
+// -------------------- LOCATIONS --------------------
 let LOCATIONS = {};
 
 try {
@@ -69,11 +73,16 @@ const loginLimiter = rateLimit({
 function requireAdmin(req, res, next) {
   const token = req.cookies?.token;
 
-  if (!token) return res.status(401).json({ error: "No token" });
+  if (!token) {
+    return res.status(401).json({ error: "No token" });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.isAdmin) return res.status(401).json({ error: "Invalid" });
+
+    if (!decoded.isAdmin) {
+      return res.status(401).json({ error: "Invalid" });
+    }
 
     next();
   } catch {
@@ -85,44 +94,49 @@ function requireAdmin(req, res, next) {
 app.use(express.static(path.join(__dirname, "public")));
 
 // -------------------- SUBMIT --------------------
-app.post("/api/submit", submitLimiter, (req, res) => {
-  const { problem, area, region, city, consent } = req.body;
+app.post("/api/submit", submitLimiter, async (req, res) => {
+  try {
+    const { problem, area, region, city, consent } = req.body;
 
-  if (!problem?.trim()) return res.status(400).json({ error: "Empty" });
+    if (!problem?.trim()) {
+      return res.status(400).json({ error: "Empty" });
+    }
 
-  if (!isValidLocation(area, region, city)) {
-    return res.status(400).json({ error: "Invalid location" });
+    if (!isValidLocation(area, region, city)) {
+      return res.status(400).json({ error: "Invalid location" });
+    }
+
+    if (!consent) {
+      return res.status(400).json({ error: "Consent required" });
+    }
+
+    const { error } = await supabase
+      .from("submissions")
+      .insert([
+        {
+          id: crypto.randomUUID(),
+          problem: problem.trim(),
+          area,
+          region,
+          city,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+    if (error) {
+      return res.status(500).json({
+        error: error.message,
+      });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      error: "Server error",
+    });
   }
-
-  if (!consent) return res.status(400).json({ error: "Consent required" });
-
-  const entry = {
-    id: crypto.randomUUID(),
-    problem: problem.trim(),
-    area,
-    region,
-    city,
-    timestamp: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-  .from("submissions")
-  .insert([
-    {
-      problem: problem.trim(),
-      area,
-      region,
-      city,
-    },
-  ]);
-
-if (error) {
-  return res.status(500).json({
-    error: error.message,
-  });
-}
-
-  res.json({ ok: true });
 });
 
 // -------------------- LOGIN --------------------
@@ -130,12 +144,16 @@ app.post("/api/admin/login", loginLimiter, (req, res) => {
   const { password } = req.body || {};
 
   if (password !== ADMIN_PASSWORD) {
-    return res.status(401).json({ error: "Wrong password" });
+    return res.status(401).json({
+      error: "Wrong password",
+    });
   }
 
-  const token = jwt.sign({ isAdmin: true }, JWT_SECRET, {
-    expiresIn: "7d",
-  });
+  const token = jwt.sign(
+    { isAdmin: true },
+    JWT_SECRET,
+    { expiresIn: "7d" }
+  );
 
   res.cookie("token", token, {
     httpOnly: true,
@@ -150,13 +168,20 @@ app.post("/api/admin/login", loginLimiter, (req, res) => {
 app.get("/api/admin/me", (req, res) => {
   const token = req.cookies?.token;
 
-  if (!token) return res.json({ isAdmin: false });
+  if (!token) {
+    return res.json({ isAdmin: false });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    res.json({ isAdmin: decoded.isAdmin });
+
+    res.json({
+      isAdmin: decoded.isAdmin,
+    });
   } catch {
-    res.json({ isAdmin: false });
+    res.json({
+      isAdmin: false,
+    });
   }
 });
 
@@ -173,7 +198,9 @@ app.get("/api/admin/submissions", requireAdmin, async (req, res) => {
     });
   }
 
-  res.json({ submissions: data });
+  res.json({
+    submissions: data,
+  });
 });
 
 // -------------------- DELETE --------------------
@@ -192,7 +219,7 @@ app.delete("/api/admin/submissions/:id", requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// -------------------- EXPORT --------------------
+// -------------------- SERVER --------------------
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
