@@ -10,11 +10,13 @@
   var areaSelect    = document.getElementById('area');
   var citySelect    = document.getElementById('city');
   var consentInput  = document.getElementById('consent');
+  var imageInput    = document.getElementById('image');
 
   var problemError  = document.getElementById('problem-error');
   var areaError     = document.getElementById('area-error');
   var cityError     = document.getElementById('city-error');
   var consentError  = document.getElementById('consent-error');
+  var imageError    = document.getElementById('image-error');
   var formError     = document.getElementById('form-error');
 
   var LOCATIONS = {};
@@ -71,7 +73,8 @@
     setFieldError(areaSelect,   areaError,    '');
     setFieldError(citySelect,   cityError,    '');
     setFieldError(consentInput, consentError, '');
-    formError.textContent = '';
+    imageError.textContent = '';
+    formError.textContent  = '';
   }
 
   problemInput.addEventListener('input',  function () { if (problemError.textContent) setFieldError(problemInput, problemError, ''); });
@@ -98,6 +101,17 @@
       setFieldError(citySelect, cityError, 'გთხოვთ აირჩიოთ ქალაქი.');
       ok = false;
     }
+    if (imageInput.files && imageInput.files[0]) {
+      var file = imageInput.files[0];
+      var allowed = ['image/jpeg', 'image/png', 'image/webp'];
+      if (!allowed.includes(file.type)) {
+        imageError.textContent = 'მხოლოდ JPG, PNG ან WEBP ფორმატი.';
+        ok = false;
+      } else if (file.size > 5 * 1024 * 1024) {
+        imageError.textContent = 'ფაილი ძალიან დიდია (მაქს. 5MB).';
+        ok = false;
+      }
+    }
     if (!consentInput.checked) {
       setFieldError(consentInput, consentError, 'გთხოვთ დაეთანხმოთ პირობებს.');
       ok = false;
@@ -115,15 +129,18 @@
     submitBtn.textContent = 'იგზავნება...';
 
     try {
+      var formData = new FormData();
+      formData.append('problem', problemInput.value.trim());
+      formData.append('area',    areaSelect.value);
+      formData.append('city',    citySelect.value);
+      formData.append('consent', consentInput.checked);
+      if (imageInput.files && imageInput.files[0]) {
+        formData.append('image', imageInput.files[0]);
+      }
+
       var res = await fetch('/api/submit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          problem: problemInput.value.trim(),
-          area:    areaSelect.value,
-          city:    citySelect.value,
-          consent: consentInput.checked,
-        }),
+        body: formData,
       });
 
       var data = {};
@@ -154,6 +171,7 @@
     clearAllErrors();
     problemInput.focus();
   });
- document.getElementById('consent-text').textContent = t('consentText');
+
+  document.getElementById('consent-text').textContent = t('consentText');
   loadLocations();
 })();

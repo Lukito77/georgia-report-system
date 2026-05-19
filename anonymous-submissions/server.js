@@ -1,13 +1,14 @@
 require('dotenv').config();
 
-const express = require('express');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const path = require('path');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
+const express    = require('express');
+const rateLimit  = require('express-rate-limit');
+const helmet     = require('helmet');
+const path       = require('path');
+const crypto     = require('crypto');
+const jwt        = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const fs = require('fs');
+const fs         = require('fs');
+const multer     = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -17,8 +18,9 @@ const supabase = createClient(
 
 const app = express();
 
-const JWT_SECRET = process.env.JWT_SECRET || "super_secret_key";
+const JWT_SECRET     = process.env.JWT_SECRET     || "super_secret_key";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || "submissions";
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20kb' }));
@@ -32,7 +34,6 @@ try {
   LOCATIONS = JSON.parse(fs.readFileSync(LOCATIONS_FILE, 'utf8'));
 } catch (err) {
   console.log("Locations file not loaded");
-  LOCATIONS = {};
 }
 
 function isValidLocation(area, city) {
@@ -40,7 +41,18 @@ function isValidLocation(area, city) {
 }
 
 const submitLimiter = rateLimit({ windowMs: 60 * 1000, max: 5 });
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const loginLimiter  = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+
+// multer — მხოლოდ მეხსიერებაში ვინახავთ, Supabase-ში ვასვლებთ
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: function (req, file, cb) {
+    var allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('invalid_type'));
+  },
+});
 
 function requireAdmin(req, res, next) {
   const token = req.cookies?.token;
@@ -56,21 +68,47 @@ function requireAdmin(req, res, next) {
 
 app.use(express.static(path.join(__dirname, "public")));
 
-app.post("/api/submit", submitLimiter, async (req, res) => {
+app.post("/api/submit", submitLimiter, upload.single('image'), async (req, res) => {
   try {
     const { problem, area, city, consent } = req.body;
 
-    if (!problem?.trim()) return res.status(400).json({ error: "Empty" });
-    if (!isValidLocation(area, city)) return res.status(400).json({ error: "Invalid location" });
-    if (!consent) return res.status(400).json({ error: "Consent required" });
+    if (!problem?.trim())              return res.status(400).json({ error: "Empty" });
+    if (!isValidLocation(area, city))  return res.status(400).json({ error: "Invalid location" });
+    if (!consent)                      return res.status(400).json({ error: "Consent required" });
+
+    let image_url = null;
+
+    if (req.file) {
+      const ext      = req.file.mimetype.split('/')[1];
+      const filename = `${crypto.randomUUID()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(filename, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('Storage upload error:', uploadError);
+        return res.status(500).json({ error: 'ფოტოს ატვირთვა ვერ მოხერხდა.' });
+      }
+
+      const { data: urlData } = supabase.storage
+        .from(STORAGE_BUCKET)
+        .getPublicUrl(filename);
+
+      image_url = urlData.publicUrl;
+    }
 
     const { error } = await supabase
       .from("submissions")
       .insert([{
-        id: crypto.randomUUID(),
-        problem: problem.trim(),
+        id:         crypto.randomUUID(),
+        problem:    problem.trim(),
         area,
         city,
+        image_url,
         created_at: new Date().toISOString(),
       }]);
 
@@ -78,7 +116,7 @@ app.post("/api/submit", submitLimiter, async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 });
