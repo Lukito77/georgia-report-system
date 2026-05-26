@@ -1,16 +1,33 @@
 require('dotenv').config();
 
-const express    = require('express');
-const rateLimit  = require('express-rate-limit');
-const helmet     = require('helmet');
-const path       = require('path');
-const crypto     = require('crypto');
-const jwt        = require('jsonwebtoken');
+const express      = require('express');
+const rateLimit    = require('express-rate-limit');
+const helmet       = require('helmet');
+const path         = require('path');
+const crypto       = require('crypto');
+const jwt          = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const fs         = require('fs');
-const multer     = require('multer');
+const fs           = require('fs');
+const multer       = require('multer');
+const mongoose     = require('mongoose');
 const { createClient } = require('@supabase/supabase-js');
 
+// MongoDB
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB error:', err));
+
+const submissionSchema = new mongoose.Schema({
+  problem:    { type: String, required: true },
+  area:       { type: String, required: true },
+  city:       { type: String, required: true },
+  image_url:  { type: String, default: null },
+  created_at: { type: Date, default: Date.now },
+});
+
+const Submission = mongoose.model('Submission', submissionSchema);
+
+// Supabase (მხოლოდ Storage-ისთვის)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
@@ -20,7 +37,7 @@ const app = express();
 
 const JWT_SECRET     = process.env.JWT_SECRET     || "super_secret_key";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
-const STORAGE_BUCKET = process.env.STORAGE_BUCKET || "submissions";
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || "submission-images";
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20kb' }));
@@ -43,7 +60,6 @@ function isValidLocation(area, city) {
 const submitLimiter = rateLimit({ windowMs: 60 * 1000, max: 5 });
 const loginLimiter  = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
 
-// multer — მხოლოდ მეხსიერებაში ვინახავთ, Supabase-ში ვასვლებთ
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -72,9 +88,9 @@ app.post("/api/submit", submitLimiter, upload.single('image'), async (req, res) 
   try {
     const { problem, area, city, consent } = req.body;
 
-    if (!problem?.trim())              return res.status(400).json({ error: "Empty" });
-    if (!isValidLocation(area, city))  return res.status(400).json({ error: "Invalid location" });
-    if (!consent)                      return res.status(400).json({ error: "Consent required" });
+    if (!problem?.trim())             return res.status(400).json({ error: "Empty" });
+    if (!isValidLocation(area, city)) return res.status(400).json({ error: "Invalid location" });
+    if (!consent)                     return res.status(400).json({ error: "Consent required" });
 
     let image_url = null;
 
@@ -101,18 +117,12 @@ app.post("/api/submit", submitLimiter, upload.single('image'), async (req, res) 
       image_url = urlData.publicUrl;
     }
 
-    const { error } = await supabase
-      .from("submissions")
-      .insert([{
-        id:         crypto.randomUUID(),
-        problem:    problem.trim(),
-        area,
-        city,
-        image_url,
-        created_at: new Date().toISOString(),
-      }]);
-
-    if (error) return res.status(500).json({ error: error.message });
+    await Submission.create({
+      problem: problem.trim(),
+      area,
+      city,
+      image_url,
+    });
 
     res.json({ ok: true });
   } catch (err) {
@@ -147,23 +157,21 @@ app.delete("/api/admin/logout", (req, res) => {
 });
 
 app.get("/api/admin/submissions", requireAdmin, async (req, res) => {
-  const { data, error } = await supabase
-    .from("submissions")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ submissions: data });
+  try {
+    const submissions = await Submission.find().sort({ created_at: -1 });
+    res.json({ submissions });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 app.delete("/api/admin/submissions/:id", requireAdmin, async (req, res) => {
-  const { error } = await supabase
-    .from("submissions")
-    .delete()
-    .eq("id", req.params.id);
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true });
+  try {
+    await Submission.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
