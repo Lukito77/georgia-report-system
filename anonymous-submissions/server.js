@@ -38,6 +38,13 @@ const app = express();
 const JWT_SECRET     = process.env.JWT_SECRET     || "super_secret_key";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET || "submission-images";
+const IS_PROD        = process.env.NODE_ENV === 'production';
+
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure:   IS_PROD,
+  sameSite: IS_PROD ? 'none' : 'lax',
+};
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20kb' }));
@@ -136,7 +143,7 @@ app.post("/api/admin/login", loginLimiter, (req, res) => {
   if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: "Wrong password" });
 
   const token = jwt.sign({ isAdmin: true }, JWT_SECRET, { expiresIn: "7d" });
-  res.cookie("token", token, { httpOnly: true, secure: true, sameSite: "none" });
+  res.cookie("token", token, COOKIE_OPTIONS);
   res.json({ ok: true });
 });
 
@@ -152,7 +159,7 @@ app.get("/api/admin/me", (req, res) => {
 });
 
 app.delete("/api/admin/logout", (req, res) => {
-  res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
+  res.clearCookie("token", COOKIE_OPTIONS);
   res.json({ ok: true });
 });
 
