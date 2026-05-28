@@ -106,7 +106,7 @@ function requireAdmin(req, res, next) {
   }
 }
  
-app.use(express.static(path.join(process.cwd(), "public")));
+app.use(express.static(path.join(__dirname, "public")));
  
 app.post("/api/submit", submitLimiter, upload.single('image'), async (req, res) => {
   try {
