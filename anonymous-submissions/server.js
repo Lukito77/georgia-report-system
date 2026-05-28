@@ -54,8 +54,25 @@ app.use(helmet({ contentSecurityPolicy: false }));
  
 let LOCATIONS = {};
 try {
- const LOCATIONS_FILE = path.join(__dirname, 'public', 'locations.json');
-  LOCATIONS = JSON.parse(fs.readFileSync(LOCATIONS_FILE, 'utf8'));
+  const possiblePaths = [
+    path.join(__dirname, 'public', 'locations.json'),
+    path.join(process.cwd(), 'public', 'locations.json'),
+    path.join(__dirname, '..', 'public', 'locations.json'),
+  ];
+
+  let loaded = false;
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      LOCATIONS = JSON.parse(fs.readFileSync(p, 'utf8'));
+      console.log('Locations loaded from:', p);
+      loaded = true;
+      break;
+    }
+  }
+  if (!loaded) {
+    console.log('Locations file not found. Checked paths:');
+    possiblePaths.forEach(p => console.log(' -', p));
+  }
 } catch (err) {
   console.log("Locations file not loaded:", err.message);
 }
@@ -185,4 +202,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
  
 module.exports = app;
- 
