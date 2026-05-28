@@ -1,4 +1,4 @@
-require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 
 const express      = require('express');
 const rateLimit    = require('express-rate-limit');
@@ -54,10 +54,10 @@ app.use(helmet({ contentSecurityPolicy: false }));
 
 let LOCATIONS = {};
 try {
-  const LOCATIONS_FILE = path.join(__dirname, 'public', 'locations.json');
+  const LOCATIONS_FILE = path.join(process.cwd(), 'public', 'locations.json');
   LOCATIONS = JSON.parse(fs.readFileSync(LOCATIONS_FILE, 'utf8'));
 } catch (err) {
-  console.log("Locations file not loaded");
+  console.log("Locations file not loaded:", err.message);
 }
 
 function isValidLocation(area, city) {
@@ -89,7 +89,7 @@ function requireAdmin(req, res, next) {
   }
 }
 
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(process.cwd(), "public")));
 
 app.post("/api/submit", submitLimiter, upload.single('image'), async (req, res) => {
   try {
