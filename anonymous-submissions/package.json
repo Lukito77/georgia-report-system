@@ -1,5 +1,5 @@
 {
-  "name": "anonymous-submissions",
+  "name": "problemebi",
   "version": "1.0.0",
   "description": "Anonymous problem submission portal with password-protected admin panel.",
   "main": "server.js",
