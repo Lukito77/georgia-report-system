@@ -83,7 +83,7 @@
 
   function removeFile() {
     selectedFile = null;
-    attachLabel.textContent = '';
+    attachLabel.innerHTML = '';
     imageInput.value = '';
     cameraInput.value = '';
     imageError.textContent = '';
@@ -95,34 +95,62 @@
     if (!allowed.includes(file.type)) {
       imageError.textContent = 'მხოლოდ JPG, PNG ან WEBP ფორმატი.';
       selectedFile = null;
-      attachLabel.textContent = '';
+      attachLabel.innerHTML = '';
       return;
     }
     if (file.size > 50 * 1024 * 1024) {
       imageError.textContent = 'ფაილი ძალიან დიდია (მაქს. 50MB).';
       selectedFile = null;
-      attachLabel.textContent = '';
+      attachLabel.innerHTML = '';
       return;
     }
     imageError.textContent = '';
     selectedFile = file;
 
-    attachLabel.innerHTML = '';
+    // წავიკითხოთ ფაილი და thumbnail გამოვაჩინოთ
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      attachLabel.innerHTML = '';
 
-    var fileName = file.name.length > 15
-      ? file.name.substring(0, 15) + '...'
-      : file.name;
+      // thumbnail კონტეინერი
+      var wrapper = document.createElement('div');
+      wrapper.style.cssText = 'position:relative;display:inline-block;margin-top:8px;';
 
-    var fileSpan = document.createElement('span');
-    fileSpan.textContent = '📎 ' + fileName;
-    attachLabel.appendChild(fileSpan);
+      // preview სურათი
+      var img = document.createElement('img');
+      img.src = e.target.result;
+      img.style.cssText = 'width:72px;height:72px;object-fit:cover;border-radius:8px;display:block;border:1px solid #ddd;';
 
-    var removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.textContent = '✕';
-    removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#c0392b;font-size:14px;padding:0 4px;width:auto;flex-shrink:0;';
-    removeBtn.addEventListener('click', removeFile);
-    attachLabel.appendChild(removeBtn);
+      // წაშლის ღილაკი
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '✕';
+      removeBtn.style.cssText = [
+        'position:absolute',
+        'top:-6px',
+        'right:-6px',
+        'width:18px',
+        'height:18px',
+        'border-radius:50%',
+        'background:#c0392b',
+        'color:#fff',
+        'border:none',
+        'cursor:pointer',
+        'font-size:11px',
+        'line-height:18px',
+        'text-align:center',
+        'padding:0',
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
+      ].join(';');
+      removeBtn.addEventListener('click', removeFile);
+
+      wrapper.appendChild(img);
+      wrapper.appendChild(removeBtn);
+      attachLabel.appendChild(wrapper);
+    };
+    reader.readAsDataURL(file);
   }
 
   document.getElementById('attach-btn').addEventListener('click', function () {
