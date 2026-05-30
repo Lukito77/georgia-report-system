@@ -98,8 +98,8 @@
       attachLabel.textContent = '';
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      imageError.textContent = 'ფაილი ძალიან დიდია (მაქს. 5MB).';
+    if (file.size > 50 * 1024 * 1024) {
+      imageError.textContent = 'ფაილი ძალიან დიდია (მაქს. 50MB).';
       selectedFile = null;
       attachLabel.textContent = '';
       return;
@@ -109,13 +109,18 @@
 
     attachLabel.innerHTML = '';
 
-    var fileText = document.createTextNode('📎 ' + file.name + ' ');
-    attachLabel.appendChild(fileText);
+    var fileName = file.name.length > 15
+      ? file.name.substring(0, 15) + '...'
+      : file.name;
+
+    var fileSpan = document.createElement('span');
+    fileSpan.textContent = '📎 ' + fileName;
+    attachLabel.appendChild(fileSpan);
 
     var removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = '✕';
-    removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#c0392b;font-size:14px;padding:0 4px;width:auto;display:inline;';
+    removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#c0392b;font-size:14px;padding:0 4px;width:auto;flex-shrink:0;';
     removeBtn.addEventListener('click', removeFile);
     attachLabel.appendChild(removeBtn);
   }
