@@ -7,14 +7,12 @@
   var submitAnother = document.getElementById('submit-another');
 
   var problemInput  = document.getElementById('problem');
-  var areaSelect    = document.getElementById('area');
   var citySelect    = document.getElementById('city');
   var consentInput  = document.getElementById('consent');
   var imageInput    = document.getElementById('image');
   var cameraInput   = document.getElementById('camera');
 
   var problemError  = document.getElementById('problem-error');
-  var areaError     = document.getElementById('area-error');
   var cityError     = document.getElementById('city-error');
   var consentError  = document.getElementById('consent-error');
   var imageError    = document.getElementById('image-error');
@@ -47,24 +45,13 @@
       })
       .then(function (data) {
         LOCATIONS = data;
-        populateOptions(areaSelect, Object.keys(LOCATIONS), '-- აირჩიეთ მხარე --');
+        var districts = LOCATIONS['თბილისი'] || [];
+        populateOptions(citySelect, districts, '-- აირჩიეთ უბანი --');
       })
       .catch(function () {
         formError.textContent = 'მონაცემები ვერ ჩაიტვირთა. გთხოვთ განაახლოთ გვერდი.';
       });
   }
-
-  areaSelect.addEventListener('change', function () {
-    var area = areaSelect.value;
-    if (!area) {
-      populateOptions(citySelect, [], '-- ჯერ აირჩიეთ მხარე --');
-      citySelect.disabled = true;
-      return;
-    }
-    var cities = LOCATIONS[area] || [];
-    populateOptions(citySelect, cities, '-- აირჩიეთ ქალაქი --');
-    citySelect.disabled = false;
-  });
 
   function setFieldError(inputEl, errorEl, msg) {
     errorEl.textContent = msg || '';
@@ -74,7 +61,6 @@
 
   function clearAllErrors() {
     setFieldError(problemInput, problemError, '');
-    setFieldError(areaSelect,   areaError,    '');
     setFieldError(citySelect,   cityError,    '');
     setFieldError(consentInput, consentError, '');
     imageError.textContent = '';
@@ -107,21 +93,17 @@
     imageError.textContent = '';
     selectedFile = file;
 
-    // წავიკითხოთ ფაილი და thumbnail გამოვაჩინოთ
     var reader = new FileReader();
     reader.onload = function (e) {
       attachLabel.innerHTML = '';
 
-      // thumbnail კონტეინერი
       var wrapper = document.createElement('div');
       wrapper.style.cssText = 'position:relative;display:inline-block;margin-top:8px;';
 
-      // preview სურათი
       var img = document.createElement('img');
       img.src = e.target.result;
       img.style.cssText = 'width:72px;height:72px;object-fit:cover;border-radius:8px;display:block;border:1px solid #ddd;';
 
-      // წაშლის ღილაკი
       var removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.textContent = '✕';
@@ -169,10 +151,9 @@
     handleFileSelect(this.files[0]);
   });
 
-  problemInput.addEventListener('input',  function () { if (problemError.textContent) setFieldError(problemInput, problemError, ''); });
-  areaSelect.addEventListener('change',   function () { if (areaError.textContent)    setFieldError(areaSelect,   areaError,    ''); });
-  citySelect.addEventListener('change',   function () { if (cityError.textContent)    setFieldError(citySelect,   cityError,    ''); });
-  consentInput.addEventListener('change', function () { if (consentError.textContent) setFieldError(consentInput, consentError, ''); });
+  problemInput.addEventListener('input', function () { if (problemError.textContent) setFieldError(problemInput, problemError, ''); });
+  citySelect.addEventListener('change',  function () { if (cityError.textContent)    setFieldError(citySelect,   cityError,    ''); });
+  consentInput.addEventListener('change',function () { if (consentError.textContent) setFieldError(consentInput, consentError, ''); });
 
   function validate() {
     var ok = true;
@@ -185,12 +166,8 @@
       setFieldError(problemInput, problemError, 'მაქს. 5000 სიმბოლო.');
       ok = false;
     }
-    if (!areaSelect.value) {
-      setFieldError(areaSelect, areaError, 'გთხოვთ აირჩიოთ მხარე.');
-      ok = false;
-    }
     if (!citySelect.value) {
-      setFieldError(citySelect, cityError, 'გთხოვთ აირჩიოთ ქალაქი.');
+      setFieldError(citySelect, cityError, 'გთხოვთ აირჩიოთ უბანი.');
       ok = false;
     }
     if (!consentInput.checked) {
@@ -212,7 +189,7 @@
     try {
       var formData = new FormData();
       formData.append('problem', problemInput.value.trim());
-      formData.append('area',    areaSelect.value);
+      formData.append('area',    'თბილისი');
       formData.append('city',    citySelect.value);
       formData.append('consent', consentInput.checked);
       if (selectedFile) {
@@ -236,8 +213,7 @@
       thankYou.classList.remove('hidden');
       form.reset();
       removeFile();
-      populateOptions(citySelect, [], '-- ჯერ აირჩიეთ მხარე --');
-      citySelect.disabled = true;
+      populateOptions(citySelect, LOCATIONS['თბილისი'] || [], '-- აირჩიეთ უბანი --');
       thankYou.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
       formError.textContent = 'ქსელის შეცდომა. სცადეთ თავიდან.';
